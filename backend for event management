@@ -1,0 +1,178 @@
+# backend.py
+import psycopg2
+import os
+import pandas as pd
+from contextlib import contextmanager
+
+# --- Database Configuration and Connection ---
+DB_NAME = os.getenv("DB_NAME", "Question_1")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "E!ght21")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+
+@contextmanager
+def get_db_connection():
+    """Provides a safe database connection using a context manager."""
+    conn = None
+    try:
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        yield conn
+    except psycopg2.Error as e:
+        print(f"Database connection failed: {e}")
+        raise
+    finally:
+        if conn:
+            conn.close()
+
+def setup_database():
+    """Sets up all necessary tables in the database if they don't exist and inserts dummy data."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                commands = [
+                    """CREATE TABLE IF NOT EXISTS users (user_id SERIAL PRIMARY KEY, full_name VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL UNIQUE, organization VARCHAR(255));""",
+                    """CREATE TABLE IF NOT EXISTS events (event_id SERIAL PRIMARY KEY, event_name VARCHAR(255) NOT NULL, event_date DATE NOT NULL, event_time TIME NOT NULL, location VARCHAR(255), event_description TEXT, manager_id INTEGER, CONSTRAINT fk_manager FOREIGN KEY (manager_id) REFERENCES users(user_id) ON DELETE CASCADE);""",
+                    """CREATE TABLE IF NOT EXISTS tickets (ticket_id SERIAL PRIMARY KEY, event_id INTEGER NOT NULL, ticket_type VARCHAR(255) NOT NULL, price_per_ticket NUMERIC(10, 2) NOT NULL CHECK (price_per_ticket >= 0), total_tickets_available INTEGER NOT NULL CHECK (total_tickets_available >= 0), tickets_sold INTEGER DEFAULT 0 CHECK (tickets_sold >= 0), CONSTRAINT fk_event FOREIGN KEY (event_id) REFERENCES events(event_id) ON DELETE CASCADE);""",
+                    """CREATE TABLE IF NOT EXISTS attendees (attendee_id SERIAL PRIMARY KEY, attendee_name VARCHAR(255) NOT NULL, attendee_email VARCHAR(255) NOT NULL UNIQUE, registration_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);""",
+                    """CREATE TABLE IF NOT EXISTS registrations (registration_id SERIAL PRIMARY KEY, attendee_id INTEGER NOT NULL, ticket_id INTEGER NOT NULL, number_of_tickets INTEGER NOT NULL CHECK (number_of_tickets > 0), total_payment NUMERIC(10, 2) NOT NULL, CONSTRAINT fk_attendee FOREIGN KEY (attendee_id) REFERENCES attendees(attendee_id) ON DELETE CASCADE, CONSTRAINT fk_ticket FOREIGN KEY (ticket_id) REFERENCES tickets(ticket_id) ON DELETE RESTRICT);"""
+                ]
+                for command in commands:
+                    cur.execute(command)
+
+                # --- Insert Dummy Data ---
+                # Check if tables are empty before inserting
+                cur.execute("SELECT COUNT(*) FROM users;")
+                if cur.fetchone()[0] == 0:
+                    print("Inserting dummy data...")
+
+                    # Dummy Users
+                    dummy_users = [
+                        ('John Doe', 'john.doe@example.com', 'Tech Solutions Inc.'),
+                        ('Jane Smith', 'jane.smith@example.com', 'Data Insights LLC'),
+                    ]
+                    cur.executemany("INSERT INTO users (full_name, email, organization) VALUES (%s, %s, %s);", dummy_users)
+
+                    # Dummy Events
+                    dummy_events = [
+                        ('AI for Business Summit', '2025-10-25', '09:00:00', 'Convention Center A', 'A two-day summit on AI in business.', 1),
+                        ('Data Analytics Workshop', '2025-11-15', '13:30:00', 'Online Webinar', 'Hands-on workshop for data professionals.', 2),
+                    ]
+                    cur.executemany("INSERT INTO events (event_name, event_date, event_time, location, event_description, manager_id) VALUES (%s, %s, %s, %s, %s, %s);", dummy_events)
+                    
+                    # Dummy Tickets
+                    dummy_tickets = [
+                        (1, 'VIP', 299.99, 50, 0),
+                        (1, 'Standard', 99.99, 200, 0),
+                        (2, 'Workshop Pass', 49.99, 150, 0),
+                    ]
+                    cur.executemany("INSERT INTO tickets (event_id, ticket_type, price_per_ticket, total_tickets_available, tickets_sold) VALUES (%s, %s, %s, %s, %s);", dummy_tickets)
+                    
+                    # Dummy Attendees
+                    dummy_attendees = [
+                        ('Alice Johnson', 'alice.j@example.com'),
+                        ('Bob Williams', 'bob.w@example.com'),
+                    ]
+                    cur.executemany("INSERT INTO attendees (attendee_name, attendee_email) VALUES (%s, %s);", dummy_attendees)
+                    
+                    # Dummy Registrations
+                    dummy_registrations = [
+                        (1, 2, 2, 199.98), # Bob bought 2 standard tickets for event 1
+                        (2, 3, 1, 49.99),  # Alice bought 1 workshop pass for event 2
+                    ]
+                    cur.executemany("INSERT INTO registrations (attendee_id, ticket_id, number_of_tickets, total_payment) VALUES (%s, %s, %s, %s);", dummy_registrations)
+                
+                conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error setting up database: {e}")
+        return False
+
+# --- CRUD Functions ---
+
+# CREATE
+def create_event(event_data):
+    """Inserts a new event record."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO events (event_name, event_date, event_time, location, event_description, manager_id) VALUES (%s, %s, %s, %s, %s, %s) RETURNING event_id;",
+                (event_data['event_name'], event_data['event_date'], event_data['event_time'], event_data['location'], event_data['event_description'], event_data['manager_id'])
+            )
+            event_id = cur.fetchone()[0]
+            conn.commit()
+            return event_id
+
+# READ
+def read_all_events():
+    """Fetches all events and returns them as a DataFrame."""
+    with get_db_connection() as conn:
+        df = pd.read_sql_query("SELECT * FROM events ORDER BY event_date DESC;", conn)
+        return df
+
+def read_attendees_by_ticket_type(ticket_type_filter):
+    """Fetches attendees filtered by ticket type."""
+    with get_db_connection() as conn:
+        query = """
+            SELECT
+                a.attendee_name,
+                a.attendee_email,
+                t.ticket_type
+            FROM attendees a
+            JOIN registrations r ON a.attendee_id = r.attendee_id
+            JOIN tickets t ON r.ticket_id = t.ticket_id
+            WHERE t.ticket_type = %s;
+        """
+        df = pd.read_sql_query(query, conn, params=(ticket_type_filter,))
+        return df
+
+def get_unique_ticket_types():
+    """Fetches all unique ticket types from the database."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT ticket_type FROM tickets;")
+            return [row[0] for row in cur.fetchall()]
+
+# UPDATE
+def update_event(event_id, new_location):
+    """Updates the location of an existing event."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE events SET location = %s WHERE event_id = %s;", (new_location, event_id))
+            conn.commit()
+
+# DELETE
+def delete_event(event_id):
+    """Deletes an event and its related data."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM events WHERE event_id = %s;", (event_id,))
+            conn.commit()
+
+# --- Business Insights Functions ---
+def get_insights():
+    """Provides key business metrics using COUNT, SUM, AVG, MIN, and MAX."""
+    with get_db_connection() as conn:
+        insights = {}
+        with conn.cursor() as cur:
+            # COUNT: Total number of events
+            cur.execute("SELECT COUNT(*) FROM events;")
+            insights['total_events'] = cur.fetchone()[0]
+
+            # SUM: Total tickets sold and total revenue
+            cur.execute("SELECT SUM(number_of_tickets) as total_tickets, SUM(total_payment) as total_revenue FROM registrations;")
+            result = cur.fetchone()
+            insights['total_tickets_sold'] = result[0]
+            insights['total_revenue'] = result[1]
+
+            # AVG: Average ticket price
+            cur.execute("SELECT AVG(price_per_ticket) FROM tickets;")
+            insights['avg_ticket_price'] = cur.fetchone()[0]
+
+            # MIN & MAX: Cheapest and most expensive tickets
+            cur.execute("SELECT MIN(price_per_ticket) FROM tickets;")
+            insights['min_ticket_price'] = cur.fetchone()[0]
+            cur.execute("SELECT MAX(price_per_ticket) FROM tickets;")
+            insights['max_ticket_price'] = cur.fetchone()[0]
+        
+        return insights
