@@ -1,0 +1,132 @@
+# frontend.py
+import streamlit as st
+import pandas as pd
+from backend import setup_database, create_event, read_all_events, read_attendees_by_ticket_type, get_unique_ticket_types, update_event, delete_event, get_insights
+
+# --- Streamlit UI ---
+st.set_page_config(layout="wide", page_title="Event Management System")
+st.title("Event Management Dashboard 📊")
+
+# Setup database on first run
+if "db_initialized" not in st.session_state:
+    if setup_database():
+        st.session_state["db_initialized"] = True
+    else:
+        st.error("Failed to initialize database. Please check your backend connection.")
+        st.stop()
+
+# Use tabs for a clean UI layout
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Create", "Read", "Update", "Delete", "Insights"])
+
+with tab1:
+    st.header("➕ Create New Event")
+    with st.form("create_event_form"):
+        event_name = st.text_input("Event Name")
+        col1, col2 = st.columns(2)
+        with col1:
+            event_date = st.date_input("Date")
+        with col2:
+            event_time = st.time_input("Time")
+        location = st.text_input("Location")
+        description = st.text_area("Description")
+        manager_id = st.number_input("Manager ID", min_value=1)
+        
+        submitted = st.form_submit_button("Create Event")
+
+        if submitted:
+            event_data = {
+                'event_name': event_name, 'event_date': event_date, 'event_time': event_time,
+                'location': location, 'event_description': description, 'manager_id': manager_id
+            }
+            try:
+                create_event(event_data)
+                st.success("✅ Event created successfully!")
+            except Exception as e:
+                st.error(f"Failed to create event: {e}")
+                
+with tab2:
+    st.header("🔍 View Events & Attendees")
+    all_events = read_all_events()
+    st.subheader("All Events")
+    st.dataframe(all_events, use_container_width=True, hide_index=True)
+
+    st.subheader("Attendees by Ticket Type")
+    ticket_types = get_unique_ticket_types()
+        
+    if ticket_types:
+        selected_ticket_type = st.selectbox("Filter Attendees by Ticket Type", ['All'] + ticket_types)
+        if selected_ticket_type != 'All':
+            attendees_df = read_attendees_by_ticket_type(selected_ticket_type)
+            st.dataframe(attendees_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Select a ticket type to view attendees.")
+    else:
+        st.info("No ticket types found. Please add tickets to events.")
+
+with tab3:
+    st.header("✏️ Update Event")
+    with st.form("update_event_form"):
+        event_id = st.number_input("Event ID to Update", min_value=1, key="update_id")
+        new_location = st.text_input("New Location")
+        submitted = st.form_submit_button("Update Event")
+        if submitted:
+            try:
+                update_event(event_id, new_location)
+                st.success("✅ Event updated successfully!")
+            except Exception as e:
+                st.error(f"Failed to update event: {e}")
+
+with tab4:
+    st.header("🗑️ Delete Event")
+    with st.form("delete_event_form"):
+        event_id_to_delete = st.number_input("Event ID to Delete", min_value=1, key="delete_id")
+        submitted = st.form_submit_button("Delete Event")
+        if submitted:
+            try:
+                delete_event(event_id_to_delete)
+                st.success("✅ Event deleted successfully!")
+            except Exception as e:
+                st.error(f"Failed to delete event: {e}")
+                
+with tab5:
+    st.header("📈 Business Insights")
+    st.markdown("Here are some key metrics for your events.")
+    insights = get_insights()
+
+    if insights['total_events'] is not None:
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Events", insights.get('total_events', 'N/A'))
+        col2.metric("Total Tickets Sold", insights.get('total_tickets_sold', 'N/A'))
+
+        # Check for None before formatting for total revenue
+        total_revenue = insights.get('total_revenue')
+        if total_revenue is not None:
+            col3.metric("Total Revenue", f"${total_revenue:,.2f}")
+        else:
+            col3.metric("Total Revenue", "$0.00")
+
+        st.markdown("---")
+
+        st.subheader("Ticket Pricing Insights")
+        col1, col2, col3 = st.columns(3)
+        
+        # Check for None before formatting for other metrics
+        avg_ticket_price = insights.get('avg_ticket_price')
+        if avg_ticket_price is not None:
+            col1.metric("Avg. Ticket Price", f"${avg_ticket_price:.2f}")
+        else:
+            col1.metric("Avg. Ticket Price", "N/A")
+
+        min_ticket_price = insights.get('min_ticket_price')
+        if min_ticket_price is not None:
+            col2.metric("Cheapest Ticket", f"${min_ticket_price:.2f}")
+        else:
+            col2.metric("Cheapest Ticket", "N/A")
+
+        max_ticket_price = insights.get('max_ticket_price')
+        if max_ticket_price is not None:
+            col3.metric("Most Expensive Ticket", f"${max_ticket_price:.2f}")
+        else:
+            col3.metric("Most Expensive Ticket", "N/A")
+    else:
+        st.info("No data available for insights. Please create an event and sell some tickets.")
