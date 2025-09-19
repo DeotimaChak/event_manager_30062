@@ -1,0 +1,61 @@
+-- Create the 'users' table
+CREATE TABLE users (
+    user_id SERIAL PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    organization VARCHAR(255)
+);
+
+-- Create the 'events' table
+CREATE TABLE events (
+    event_id SERIAL PRIMARY KEY,
+    event_name VARCHAR(255) NOT NULL,
+    event_date DATE NOT NULL,
+    event_time TIME NOT NULL,
+    location VARCHAR(255),
+    event_description TEXT,
+    manager_id INTEGER,
+    CONSTRAINT fk_manager
+        FOREIGN KEY (manager_id)
+        REFERENCES users(user_id)
+        ON DELETE CASCADE
+);
+
+-- Create the 'tickets' table
+CREATE TABLE tickets (
+    ticket_id SERIAL PRIMARY KEY,
+    event_id INTEGER NOT NULL,
+    ticket_type VARCHAR(255) NOT NULL,
+    price_per_ticket NUMERIC(10, 2) NOT NULL CHECK (price_per_ticket >= 0),
+    total_tickets_available INTEGER NOT NULL CHECK (total_tickets_available >= 0),
+    tickets_sold INTEGER DEFAULT 0 CHECK (tickets_sold >= 0),
+    CONSTRAINT fk_event
+        FOREIGN KEY (event_id)
+        REFERENCES events(event_id)
+        ON DELETE CASCADE
+);
+
+-- Create the 'attendees' table
+CREATE TABLE attendees (
+    attendee_id SERIAL PRIMARY KEY,
+    attendee_name VARCHAR(255) NOT NULL,
+    attendee_email VARCHAR(255) NOT NULL UNIQUE,
+    registration_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create the 'registrations' linking table
+CREATE TABLE registrations (
+    registration_id SERIAL PRIMARY KEY,
+    attendee_id INTEGER NOT NULL,
+    ticket_id INTEGER NOT NULL,
+    number_of_tickets INTEGER NOT NULL CHECK (number_of_tickets > 0),
+    total_payment NUMERIC(10, 2) NOT NULL,
+    CONSTRAINT fk_attendee
+        FOREIGN KEY (attendee_id)
+        REFERENCES attendees(attendee_id)
+        ON DELETE CASCADE,
+    CONSTRAINT fk_ticket
+        FOREIGN KEY (ticket_id)
+        REFERENCES tickets(ticket_id)
+        ON DELETE RESTRICT
+);
