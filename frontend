@@ -1,0 +1,170 @@
+# frontend.py
+import streamlit as st
+from backend import (
+    setup_database,
+    get_users_by_role,
+    create_goal,
+    update_goal_status,
+    get_employee_goals,
+    get_tasks_by_goal,
+    get_manager_employees,
+    create_task,
+    update_task_status,
+    create_feedback,
+    get_feedback_by_employee_and_goal,
+    get_insights
+)
+import pandas as pd
+
+# --- 1. Streamlit UI Configuration ---
+st.set_page_config(layout="wide", page_title="Performance Management System")
+st.title("Performance Management Dashboard 🚀")
+
+# Ensure database is set up on first run
+if "db_initialized" not in st.session_state:
+    try:
+        if setup_database():
+            st.session_state["db_initialized"] = True
+            st.success("Database tables are ready!")
+    except Exception as e:
+        st.error(f"Failed to initialize database: {e}")
+        st.stop()
+
+# --- 2. User Authentication (Simple Demo) ---
+# In a real app, this would be a login page. For this demo, we use a simple select box.
+managers_df = get_users_by_role('Manager')
+employees_df = get_users_by_role('Employee')
+
+st.sidebar.header("User Login")
+user_role = st.sidebar.selectbox("Select Your Role", ["Manager", "Employee"])
+
+current_user = None
+current_user_id = None
+
+if user_role == "Manager" and not managers_df.empty:
+    current_user = st.sidebar.selectbox("Select Your Name", managers_df['full_name'], format_func=lambda x: x)
+    current_user_id = int(managers_df[managers_df['full_name'] == current_user]['user_id'].iloc[0])
+elif user_role == "Employee" and not employees_df.empty:
+    current_user = st.sidebar.selectbox("Select Your Name", employees_df['full_name'], format_func=lambda x: x)
+    current_user_id = int(employees_df[employees_df['full_name'] == current_user]['user_id'].iloc[0])
+else:
+    st.info(f"No {user_role}s found in the database. Please add some users first.")
+    st.stop()
+    
+# --- 3. Dashboard Tabs ---
+if user_role == "Manager":
+    tab1, tab2, tab3, tab4 = st.tabs(["Set Goals", "Track Progress", "Give Feedback", "Insights"])
+    with tab1:
+        st.header("🎯 Set New Goal")
+        employees_list = get_manager_employees(current_user_id)
+        if employees_list.empty:
+            st.warning("You are not managing any employees yet.")
+        else:
+            employee_selection = st.selectbox("Select Employee", employees_list['full_name'], format_func=lambda x: x)
+            if employee_selection:
+                selected_employee_id = employees_list[employees_list['full_name'] == employee_selection]['user_id'].iloc[0]
+                with st.form("set_goal_form"):
+                    goal_title = st.text_input("Goal Title")
+                    goal_description = st.text_area("Description")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        goal_due_date = st.date_input("Due Date")
+                    with col2:
+                        goal_status = st.selectbox("Status", ['Draft', 'In Progress', 'Completed', 'Cancelled'])
+                    submitted = st.form_submit_button("Set Goal")
+                    if submitted:
+                        goal_data = {'title': goal_title, 'description': goal_description, 'due_date': goal_due_date, 'status': goal_status, 'employee_id': selected_employee_id, 'manager_id': current_user_id}
+                        create_goal(goal_data)
+                        st.success("Goal set successfully!")
+    with tab2:
+        st.header("📈 Track Team Progress")
+        employees_list = get_manager_employees(current_user_id)
+        if not employees_list.empty:
+            employee_selection = st.selectbox("Select Employee to View Goals", employees_list['full_name'], format_func=lambda x: x)
+            selected_employee_id = employees_list[employees_list['full_name'] == employee_selection]['user_id'].iloc[0]
+            goals_df = get_employee_goals(selected_employee_id)
+            if not goals_df.empty:
+                st.subheader(f"Goals for {employee_selection}")
+                st.dataframe(goals_df, use_container_width=True)
+                
+                selected_goal = st.selectbox("Update a Goal's Status", goals_df['title'], format_func=lambda x: x)
+                if selected_goal:
+                    selected_goal_id = goals_df[goals_df['title'] == selected_goal]['goal_id'].iloc[0]
+                    new_status = st.selectbox("New Status", ['Draft', 'In Progress', 'Completed', 'Cancelled'], index=['Draft', 'In Progress', 'Completed', 'Cancelled'].index(goals_df[goals_df['goal_id'] == selected_goal_id]['status'].iloc[0]))
+                    if st.button("Update Status"):
+                        update_goal_status(selected_goal_id, new_status)
+                        st.success("Goal status updated!")
+                        st.experimental_rerun()
+            else:
+                st.info("No goals found for this employee.")
+    with tab3:
+        st.header("✍️ Give Feedback")
+        employees_list = get_manager_employees(current_user_id)
+        if not employees_list.empty:
+            employee_selection = st.selectbox("Select Employee for Feedback", employees_list['full_name'], format_func=lambda x: x)
+            selected_employee_id = employees_list[employees_list['full_name'] == employee_selection]['user_id'].iloc[0]
+            goals_df = get_employee_goals(selected_employee_id)
+            if not goals_df.empty:
+                goal_selection = st.selectbox("Select a Goal to give Feedback on", goals_df['title'], format_func=lambda x: x)
+                if goal_selection:
+                    selected_goal_id = goals_df[goals_df['title'] == goal_selection]['goal_id'].iloc[0]
+                    feedback_text = st.text_area("Write Your Feedback")
+                    if st.button("Submit Feedback"):
+                        feedback_data = {'manager_id': current_user_id, 'employee_id': selected_employee_id, 'goal_id': selected_goal_id, 'feedback_text': feedback_text}
+                        create_feedback(feedback_data)
+                        st.success("Feedback submitted successfully!")
+            else:
+                st.info("No goals found for this employee to give feedback on.")
+    with tab4:
+        st.header("📊 Business Insights")
+        insights = get_insights()
+        st.metric("Total Goals", insights.get('total_goals', 0))
+        st.metric("Completed Goals", insights.get('completed_goals', 0))
+        st.metric("Total Tasks", insights.get('total_tasks', 0))
+        st.metric("Avg. Tasks per Completed Goal", f"{insights.get('avg_tasks_per_completed_goal', 0):.2f}" if insights.get('avg_tasks_per_completed_goal') is not None else "N/A")
+elif user_role == "Employee":
+    tab1, tab2, tab3 = st.tabs(["View Goals", "Log Tasks", "View Feedback"])
+    with tab1:
+        st.header("🎯 My Goals")
+        goals_df = get_employee_goals(current_user_id)
+        if not goals_df.empty:
+            st.dataframe(goals_df, use_container_width=True)
+            st.info("Only your manager can update the goal status.")
+        else:
+            st.info("No goals have been assigned to you yet.")
+    with tab2:
+        st.header("📝 Log Tasks for a Goal")
+        goals_df = get_employee_goals(current_user_id)
+        if not goals_df.empty:
+            goal_selection = st.selectbox("Select a Goal", goals_df['title'], format_func=lambda x: x)
+            if goal_selection:
+                selected_goal_id = goals_df[goals_df['title'] == goal_selection]['goal_id'].iloc[0]
+                task_description = st.text_area("Task Description")
+                if st.button("Log Task"):
+                    task_data = {'description': task_description, 'status': 'Pending', 'goal_id': selected_goal_id, 'employee_id': current_user_id}
+                    create_task(task_data)
+                    st.success("Task logged successfully!")
+                    st.experimental_rerun()
+                st.subheader("Tasks Logged for this Goal")
+                tasks_df = get_tasks_by_goal(selected_goal_id)
+                if not tasks_df.empty:
+                    st.dataframe(tasks_df, use_container_width=True)
+                else:
+                    st.info("No tasks logged for this goal yet.")
+        else:
+            st.info("No goals to log tasks for.")
+    with tab3:
+        st.header("💬 View Feedback")
+        goals_df = get_employee_goals(current_user_id)
+        if not goals_df.empty:
+            goal_selection = st.selectbox("Select Goal to View Feedback", goals_df['title'], format_func=lambda x: x)
+            if goal_selection:
+                selected_goal_id = goals_df[goals_df['title'] == goal_selection]['goal_id'].iloc[0]
+                feedback_df = get_feedback_by_employee_and_goal(current_user_id, selected_goal_id)
+                if not feedback_df.empty:
+                    st.subheader("Feedback from your Manager")
+                    st.dataframe(feedback_df, use_container_width=True)
+                else:
+                    st.info("No feedback for this goal yet.")
+        else:
+            st.info("No goals to view feedback for.")
